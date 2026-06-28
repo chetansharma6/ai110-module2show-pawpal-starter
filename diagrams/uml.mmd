@@ -9,6 +9,7 @@ classDiagram
         +list~Pet~ pets
         +add_pet(pet) None
         +update_preferences(preferences) None
+        +get_all_tasks() list~Task~
     }
 
     class Pet {
@@ -18,30 +19,31 @@ classDiagram
         +list~Task~ tasks
         +update_info(name, species, age) None
         +add_task(task) None
+        +remove_task(task) None
+        +get_tasks() list~Task~
     }
 
     class Task {
-        +str task_name
+        +str description
         +int duration
-        +int priority
-        +str task_type
+        +str frequency
+        +str priority
         +bool completed
         +mark_complete() None
-        +edit_task(duration, priority) None
+        +edit_task(description, duration, frequency, priority) None
     }
 
     class Scheduler {
-        +list~Task~ list_of_tasks
+        +Owner owner
         +int available_time
         +list~Task~ schedule
-        +str reasoning
-        +from_owner(owner) Scheduler$
-        +generate_schedule() list~Task~
+        +list~str~ reasoning
         +prioritize_tasks() list~Task~
+        +generate_schedule() list~Task~
         +explain_plan() str
     }
 
     Owner "1" --> "1..*" Pet : owns
     Pet "1" --> "0..*" Task : has
-    Scheduler "1" o-- "0..*" Task : schedules
-    Owner "1" ..> "1" Scheduler : uses
+    Scheduler "1" --> "1" Owner : plans for
+    Scheduler ..> Task : schedules
