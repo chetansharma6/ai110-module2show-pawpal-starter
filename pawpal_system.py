@@ -17,9 +17,14 @@ class Pet:
     name: str
     species: str
     age: int
+    tasks: list[Task] = field(default_factory=list)
 
     def update_info(self, name: str, species: str, age: int) -> None:
         """Update this pet's basic information."""
+        raise NotImplementedError
+
+    def add_task(self, task: Task) -> None:
+        """Attach a care task to this pet."""
         raise NotImplementedError
 
 
@@ -66,9 +71,24 @@ class Scheduler:
     def __init__(self, list_of_tasks: list[Task], available_time: int) -> None:
         self.list_of_tasks = list_of_tasks
         self.available_time = available_time
+        # Holds the most recent result of generate_schedule() so that
+        # explain_plan() can describe it without recomputing.
+        self.schedule: list[Task] = []
+        self.reasoning: str = ""
+
+    @classmethod
+    def from_owner(cls, owner: Owner) -> "Scheduler":
+        """Build a Scheduler from an Owner: collect every pet's tasks and
+        inherit the owner's available time. Implements the Owner-uses-Scheduler
+        relationship without callers wiring tasks and time by hand."""
+        raise NotImplementedError
 
     def generate_schedule(self) -> list[Task]:
-        """Produce a daily schedule honoring constraints and priorities."""
+        """Produce a daily schedule honoring constraints and priorities.
+
+        Implementations should store the result in self.schedule (and the
+        rationale in self.reasoning) before returning it.
+        """
         raise NotImplementedError
 
     def prioritize_tasks(self) -> list[Task]:
