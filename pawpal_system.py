@@ -11,6 +11,7 @@ Priority is a readable label: "High", "Medium", or "Low".
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 # Ranks priority labels so the scheduler can sort by importance.
@@ -92,6 +93,37 @@ class Task:
         if time is not None:
             self.time = time
 
+    def to_dict(self) -> dict:
+        """Serialize this task to a plain dict for JSON.
+
+        The ``pet`` back-reference is deliberately omitted — it would create a
+        Pet<->Task cycle and is re-wired by ``Pet.add_task`` on load.
+        """
+        return {
+            "description": self.description,
+            "duration": self.duration,
+            "frequency": self.frequency,
+            "priority": self.priority,
+            "time": self.time,
+            "completed": self.completed,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Task":
+        """Rebuild a Task from a dict produced by :meth:`to_dict`.
+
+        Unknown keys are ignored and missing keys fall back to the field
+        defaults, so older/partial ``data.json`` files still load.
+        """
+        return cls(
+            description=data["description"],
+            duration=data["duration"],
+            frequency=data["frequency"],
+            priority=data["priority"],
+            time=data.get("time", "00:00"),
+            completed=data.get("completed", False),
+        )
+
 
 @dataclass
 class Pet:
@@ -122,6 +154,27 @@ class Pet:
         """Return all of this pet's tasks."""
         return self.tasks
 
+    def to_dict(self) -> dict:
+        """Serialize this pet (and its tasks) to a plain dict for JSON."""
+        return {
+            "name": self.name,
+            "species": self.species,
+            "age": self.age,
+            "tasks": [task.to_dict() for task in self.tasks],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Pet":
+        """Rebuild a Pet and its tasks from a dict produced by :meth:`to_dict`.
+
+        Tasks are attached via ``add_task`` so each task's ``pet`` back-reference
+        is wired up correctly on load.
+        """
+        pet = cls(name=data["name"], species=data["species"], age=data["age"])
+        for task_data in data.get("tasks", []):
+            pet.add_task(Task.from_dict(task_data))
+        return pet
+
 
 @dataclass
 class Owner:
@@ -147,6 +200,55 @@ class Owner:
             all_tasks.extend(pet.get_tasks())
         return all_tasks
 
+    def to_dict(self) -> dict:
+        """Serialize the whole owner (pets and tasks) to a plain dict for JSON."""
+        return {
+            "name": self.name,
+            "time_available": self.time_available,
+            "preferences": self.preferences,
+            "pets": [pet.to_dict() for pet in self.pets],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Owner":
+        """Rebuild a full Owner (with pets and tasks) from a serialized dict."""
+        owner = cls(
+            name=data["name"],
+            time_available=data["time_available"],
+            preferences=data.get("preferences", {}),
+        )
+        for pet_data in data.get("pets", []):
+            owner.add_pet(Pet.from_dict(pet_data))
+        return owner
+
+    def save_to_json(self, path: str = "data.json") -> None:
+        """Write this owner and all pets/tasks to ``path`` as JSON.
+
+        Persists the entire object graph so a later ``load_from_json`` restores
+        the same pets, tasks, completion state, times, and preferences. Overwrites
+        the file if it already exists.
+        """
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+
+    @classmethod
+    def load_from_json(cls, path: str = "data.json") -> "Owner":
+        """Load an owner previously saved with :meth:`save_to_json`.
+
+        Args:
+            path: Path to the JSON file (defaults to ``data.json``).
+
+        Returns:
+            The reconstructed ``Owner`` with every pet and task restored and each
+            task's ``pet`` back-reference re-wired.
+
+        Raises:
+            FileNotFoundError: if ``path`` does not exist — callers that want a
+                blank start on first run should catch this and create a new Owner.
+        """
+        with open(path, "r", encoding="utf-8") as f:
+            return cls.from_dict(json.load(f))
+
 
 class Scheduler:
     """Builds a daily plan for an owner that fits within their available time."""
@@ -167,14 +269,29 @@ class Scheduler:
         """
         task.mark_complete()
 
+    @staticmethod
+    def _time_key(time_str: str) -> tuple[int, int]:
+        """Sortable key for a task's time-of-day, robust to bad values.
+
+        Returns ``(0, minutes-since-midnight)`` for a valid "HH:MM" string and
+        ``(1, 0)`` for anything unparseable, so ordering is numeric (an unpadded
+        "9:00" still precedes "10:00") and invalid times sort *last* instead of
+        raising. This keeps sorting consistent with ``detect_conflicts`` and
+        ``find_next_available_slot``, which also degrade gracefully on bad times.
+        """
+        minutes = Scheduler._to_minutes(time_str)
+        if minutes is None:
+            return (1, 0)   # unparseable: sort after all valid times
+        return (0, minutes)
+
     def sort_by_time(self, tasks: list[Task] | None = None) -> list[Task]:
         """Return tasks ordered by their time of day, earliest first.
 
-        Times are "HH:MM" strings. The ``sorted`` key splits each into a
-        (hour, minute) integer tuple so ordering is numeric — that way an
-        unpadded "9:00" still sorts before "10:00" (a plain string sort
-        would put "10:00" first because the character "1" < "9"). The input
-        list is not modified; a new sorted list is returned.
+        Times are "HH:MM" strings, ordered numerically so an unpadded "9:00"
+        sorts before "10:00" (a plain string sort would put "10:00" first
+        because the character "1" < "9"). Tasks whose time can't be parsed are
+        placed last rather than raising. The input list is not modified; a new
+        sorted list is returned.
 
         Args:
             tasks: Tasks to sort. Defaults to every task the owner has
@@ -186,9 +303,40 @@ class Scheduler:
         """
         if tasks is None:
             tasks = self.owner.get_all_tasks()
+        return sorted(tasks, key=lambda task: self._time_key(task.time))
+
+    def sort_by_priority(self, tasks: list[Task] | None = None) -> list[Task]:
+        """Return tasks ordered by priority first, then by time of day.
+
+        This is the priority-based scheduling order: tasks are grouped High →
+        Medium → Low (unknown labels rank lowest), and *within* the same priority
+        they fall back to chronological order so the day still reads top-to-bottom
+        in time. The sort key is ``(-priority_rank, time_key)``:
+
+        * ``-PRIORITY_RANK`` makes higher priority sort first (ascending sort,
+          negated rank), with unknown labels defaulting to rank 0 (last).
+        * ``_time_key`` breaks ties numerically (so an unpadded ``"9:00"`` still
+          precedes ``"10:00"``) and places unparseable times last rather than
+          raising.
+
+        The input list is not modified; a new sorted list is returned.
+
+        Args:
+            tasks: Tasks to sort. Defaults to every task the owner has, so it
+                composes with ``filter_tasks`` just like ``sort_by_time``.
+
+        Returns:
+            A new list ordered by priority (highest first), then time (earliest
+            first) within each priority level.
+        """
+        if tasks is None:
+            tasks = self.owner.get_all_tasks()
         return sorted(
             tasks,
-            key=lambda task: tuple(int(part) for part in task.time.split(":")),
+            key=lambda task: (
+                -PRIORITY_RANK.get(task.priority, 0),
+                self._time_key(task.time),
+            ),
         )
 
     def filter_tasks(
@@ -299,6 +447,73 @@ class Scheduler:
                         f"{b.time}-{self._to_time_str(b_end)})."
                     )
         return warnings
+
+    def find_next_available_slot(
+        self,
+        duration: int,
+        earliest: str = "00:00",
+        latest: str = "23:59",
+        tasks: list[Task] | None = None,
+    ) -> str | None:
+        """Return the earliest start time that fits a task of ``duration`` minutes.
+
+        Scans the day for the first open gap — between ``earliest`` and
+        ``latest`` — large enough to hold a ``duration``-minute task without
+        overlapping any existing task's ``[start, start + duration)`` window.
+        This is the natural companion to :meth:`detect_conflicts`: rather than
+        only *reporting* a clash, it *proposes* a clash-free time to use instead.
+
+        The scan is greedy and left-to-right: it starts a cursor at ``earliest``
+        and, whenever a busy window would overlap the cursor, jumps the cursor to
+        the end of that window; the first point where ``duration`` minutes are
+        free before the next window (or before ``latest``) is the answer. Busy
+        windows are sorted once, so the work is O(n log n).
+
+        Args:
+            duration: Length of the task to place, in minutes.
+            earliest: Earliest acceptable start time, "HH:MM" (default midnight).
+            latest: Latest acceptable *end* time, "HH:MM" (default 23:59). The
+                returned slot plus ``duration`` will not run past this.
+            tasks: Existing tasks to schedule around. Defaults to the owner's
+                *incomplete* tasks (so a completed task doesn't block its slot).
+
+        Returns:
+            The earliest fitting start time as an "HH:MM" string, or ``None`` if
+            no gap of ``duration`` minutes exists within the window. Returns
+            ``None`` for a non-positive duration or an invalid/backwards range.
+        """
+        if duration <= 0:
+            return None
+
+        cursor = self._to_minutes(earliest)
+        limit = self._to_minutes(latest)
+        if cursor is None or limit is None or cursor + duration > limit:
+            return None
+
+        if tasks is None:
+            tasks = [t for t in self.owner.get_all_tasks() if not t.completed]
+
+        # Busy windows in minutes, sorted by start; skip unparseable times.
+        windows = []
+        for task in tasks:
+            start = self._to_minutes(task.time)
+            if start is None:
+                continue
+            windows.append((start, start + task.duration))
+        windows.sort(key=lambda window: window[0])
+
+        for start, end in windows:
+            # If the free gap before this window is big enough, we're done.
+            if start >= cursor + duration:
+                return self._to_time_str(cursor)
+            # Otherwise this window blocks the cursor; jump past it.
+            if end > cursor:
+                cursor = end
+                if cursor + duration > limit:
+                    return None
+
+        # No remaining windows: the slot fits if it still ends by `latest`.
+        return self._to_time_str(cursor) if cursor + duration <= limit else None
 
     def prioritize_tasks(self) -> list[Task]:
         """Return the owner's unfinished tasks, most important first."""

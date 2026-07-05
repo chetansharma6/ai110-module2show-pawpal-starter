@@ -1,0 +1,76 @@
+classDiagram
+    %% PawPal+ — daily pet care planning assistant
+    %% Final UML: matches pawpal_system.py after the full build (sorting,
+    %% priority scheduling, filtering, conflict detection, next-available-slot,
+    %% recurring tasks, and JSON persistence).
+
+    class Owner {
+        +str name
+        +int time_available
+        +dict preferences
+        +list~Pet~ pets
+        +add_pet(pet) None
+        +update_preferences(preferences) None
+        +get_all_tasks() list~Task~
+        +to_dict() dict
+        +from_dict(data) Owner$
+        +save_to_json(path) None
+        +load_from_json(path) Owner$
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +int age
+        +list~Task~ tasks
+        +update_info(name, species, age) None
+        +add_task(task) None
+        +remove_task(task) None
+        +get_tasks() list~Task~
+        +to_dict() dict
+        +from_dict(data) Pet$
+    }
+
+    class Task {
+        +str description
+        +int duration
+        +str frequency
+        +str priority
+        +str time
+        +bool completed
+        +Pet pet
+        +tuple RECURRING$
+        +mark_complete() None
+        +edit_task(description, duration, frequency, priority, time) None
+        +to_dict() dict
+        +from_dict(data) Task$
+        -_next_occurrence() Task
+    }
+
+    class Scheduler {
+        +Owner owner
+        +int available_time
+        +list~Task~ schedule
+        +list~str~ reasoning
+        +mark_task_complete(task) None
+        +sort_by_time(tasks) list~Task~
+        +sort_by_priority(tasks) list~Task~
+        +filter_tasks(completed, pet_name) list~Task~
+        +detect_conflicts(tasks) list~str~
+        +find_next_available_slot(duration, earliest, latest, tasks) str
+        +prioritize_tasks() list~Task~
+        +generate_schedule() list~Task~
+        +explain_plan() str
+        -_time_key(time_str) tuple$
+        -_to_minutes(time_str) int$
+        -_to_time_str(minutes) str$
+    }
+
+    %% Module-level constant used by Scheduler.prioritize_tasks()
+    %% PRIORITY_RANK = {"High": 3, "Medium": 2, "Low": 1}
+
+    Owner "1" --> "1..*" Pet : owns
+    Pet "1" --> "0..*" Task : has
+    Task "0..*" --> "1" Pet : belongs to
+    Scheduler "1" --> "1" Owner : plans for
+    Scheduler ..> Task : schedules

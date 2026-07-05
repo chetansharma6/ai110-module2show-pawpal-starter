@@ -3,7 +3,23 @@
 Run with:  python main.py
 """
 
+import sys
+
+# The formatted output uses emojis and box-drawing characters. Windows consoles
+# default to cp1252, which can't encode them, so switch stdout to UTF-8 up front
+# (errors="replace" so an odd character degrades gracefully instead of crashing).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):  # non-reconfigurable stream: carry on
+    pass
+
+from cli_format import color, tasks_table
 from pawpal_system import Owner, Pet, Task, Scheduler
+
+
+def header(title: str) -> None:
+    """Print a bold, cyan-ish section header so the output is easy to scan."""
+    print("\n" + color(f"── {title} ──", "grey", bold=True))
 
 
 def main() -> None:
@@ -36,59 +52,51 @@ def main() -> None:
     # Recurrence demo: completing Luna's daily "Feed" should auto-queue a fresh,
     # incomplete "Feed" for the next occurrence.
     feed = luna.get_tasks()[1]  # Luna's "Feed" (daily)
+    header("Recurrence: completing Luna's daily Feed")
     print(f"Luna's task count before completing Feed: {len(luna.get_tasks())}")
     scheduler.mark_task_complete(feed)
     print(f"Luna's task count after completing Feed:  {len(luna.get_tasks())}")
-    print("Luna's Feed tasks now:")
-    for task in scheduler.filter_tasks(pet_name="Luna"):
-        if task.description == "Feed":
-            status = "done" if task.completed else "todo"
-            print(f"  {task.time}  Feed ({status})")
-    print()
+    luna_feeds = [t for t in scheduler.filter_tasks(pet_name="Luna") if t.description == "Feed"]
+    print(tasks_table(luna_feeds))
 
     # 5. Sorting demo: all tasks ordered by time of day.
-    print("All tasks sorted by time:")
-    for task in scheduler.sort_by_time():
-        status = "done" if task.completed else "todo"
-        print(f"  {task.time}  {task.description} ({task.duration} min, {status})")
+    header("All tasks sorted by time")
+    print(tasks_table(scheduler.sort_by_time()))
+
+    # 5b. Priority-based scheduling: priority first (High->Medium->Low), then
+    #     time of day within each priority level.
+    header("All tasks sorted by priority, then time")
+    print(tasks_table(scheduler.sort_by_priority()))
 
     # 6. Filtering demo: by pet name, then by completion status.
-    print("\nBuddy's tasks (sorted by time):")
-    buddy_tasks = scheduler.sort_by_time(scheduler.filter_tasks(pet_name="Buddy"))
-    for task in buddy_tasks:
-        print(f"  {task.time}  {task.description}")
+    header("Buddy's tasks (filtered by pet, sorted by time)")
+    print(tasks_table(scheduler.sort_by_time(scheduler.filter_tasks(pet_name="Buddy"))))
 
-    print("\nUnfinished tasks (sorted by time):")
-    todo_tasks = scheduler.sort_by_time(scheduler.filter_tasks(completed=False))
-    for task in todo_tasks:
-        print(f"  {task.time}  {task.description}")
-
-    print("\nCompleted tasks:")
-    done_tasks = scheduler.filter_tasks(completed=True)
-    for task in done_tasks:
-        print(f"  {task.time}  {task.description}")
+    header("Outstanding tasks (filtered by status)")
+    print(tasks_table(scheduler.sort_by_time(scheduler.filter_tasks(completed=False))))
 
     # 6b. Conflict detection: warn about tasks whose times overlap.
-    print("\nSchedule conflicts:")
+    header("Schedule conflicts")
     conflicts = scheduler.detect_conflicts()
     if not conflicts:
-        print("  None — no overlapping tasks.")
+        print(color("✅ None — no overlapping tasks.", "green"))
     else:
         for warning in conflicts:
-            print(f"  [!] {warning}")
+            print(color(f"⚠️  {warning}", "yellow"))
 
     # 7. Original scheduling demo still works on top of the same data.
     schedule = scheduler.generate_schedule()
-    print("\nToday's Schedule (fits in available time, priority order):")
+    header("Today's Schedule (fits in available time, priority order)")
     if not schedule:
-        print("  No tasks fit in the available time today.")
+        print(color("  No tasks fit in the available time today.", "yellow"))
     else:
-        for task in schedule:
-            print(f"  {task.description} ({task.duration} min, Priority: {task.priority})")
+        print(tasks_table(schedule))
 
-    print("\nReasoning:")
+    header("Reasoning")
     for line in scheduler.reasoning:
-        print(f"  *{line}")
+        # Color the marker so picks (green) and skips (grey) are scannable.
+        marker = color("✔", "green") if "scheduled" in line else color("✘", "grey")
+        print(f"  {marker}  {line}")
 
 
 if __name__ == "__main__":
