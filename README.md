@@ -56,19 +56,54 @@ Paste a sample of your app's CLI or Streamlit output here so a reader can see wh
 
 ## 🧪 Testing PawPal+
 
+Run the full test suite from the project root:
+
 ```bash
-# Run the full test suite:
-pytest
-
-# Run with coverage:
-pytest --cov
+python -m pytest
 ```
 
-Sample test output:
+The suite (in [`tests/test_pawpal.py`](tests/test_pawpal.py)) has **12 tests** covering
+the core scheduling behaviors:
+
+- **Task & pet basics** — marking a task complete flips its status; adding a task grows the pet's task list.
+- **Recurrence logic** — completing a `daily`/`weekly` task auto-queues a fresh, incomplete copy for the next day; completing twice never spawns duplicates; one-off tasks do not regenerate.
+- **Sorting correctness** — `sort_by_time()` returns tasks in chronological (time-of-day) order, sorts numerically so `"9:00"` precedes `"10:00"`, and does not mutate the input list.
+- **Conflict detection** — flags duplicate/same-time tasks across different pets, catches partial time-window overlaps, and reports no conflicts when times are clear.
+
+Successful run:
 
 ```
-# Paste your pytest output here
+============================= test session starts =============================
+platform win32 -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\mahesh\AppData\Local\Python\pythoncore-3.14-64\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\mahesh\Documents\ai110-module2show-pawpal-starter
+plugins: anyio-4.14.0
+collecting ... collected 12 items
+
+tests/test_pawpal.py::test_mark_complete_changes_status PASSED           [  8%]
+tests/test_pawpal.py::test_adding_task_increases_pet_task_count PASSED   [ 16%]
+tests/test_pawpal.py::test_completing_recurring_task_queues_next_occurrence PASSED [ 25%]
+tests/test_pawpal.py::test_completing_twice_does_not_spawn_duplicates PASSED [ 33%]
+tests/test_pawpal.py::test_non_recurring_task_does_not_spawn PASSED      [ 41%]
+tests/test_pawpal.py::test_detect_conflicts_flags_same_time_across_pets PASSED [ 50%]
+tests/test_pawpal.py::test_detect_conflicts_flags_partial_overlap PASSED [ 58%]
+tests/test_pawpal.py::test_no_conflicts_when_times_are_clear PASSED      [ 66%]
+tests/test_pawpal.py::test_sort_by_time_returns_chronological_order PASSED [ 75%]
+tests/test_pawpal.py::test_sort_by_time_is_numeric_not_lexicographic PASSED [ 83%]
+tests/test_pawpal.py::test_sort_by_time_does_not_mutate_input PASSED     [ 91%]
+tests/test_pawpal.py::test_completing_daily_task_creates_next_day_task PASSED [100%]
+
+============================= 12 passed in 0.48s ==============================
 ```
+
+### Confidence Level: ⭐⭐⭐⭐☆ (4 / 5)
+
+All 12 tests pass and the **core scheduling logic** — recurrence, sorting, priority
+planning, and conflict detection — is well covered and behaves correctly. One star
+is withheld because a few edge cases are not yet guarded: `sort_by_time()` raises on a
+malformed `"HH:MM"` string (unlike `detect_conflicts()`, which skips it gracefully),
+and there is no validation of out-of-range times or negative durations. Hardening
+those inputs would take reliability to 5/5.
 
 ## 📐 Smarter Scheduling
 

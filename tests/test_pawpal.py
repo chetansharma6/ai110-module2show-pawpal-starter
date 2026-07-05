@@ -109,3 +109,78 @@ def test_no_conflicts_when_times_are_clear():
     owner.add_pet(buddy)
 
     assert Scheduler(owner).detect_conflicts() == []
+
+
+# ---------------------------------------------------------------------------
+# Sorting correctness: tasks come back in chronological (time-of-day) order.
+# ---------------------------------------------------------------------------
+
+def test_sort_by_time_returns_chronological_order():
+    """sort_by_time() should order tasks earliest-first by time of day."""
+    owner = Owner(name="Sam", time_available=120)
+    buddy = Pet(name="Buddy", species="dog", age=3)
+    # Added out of order on purpose.
+    buddy.add_task(Task("Evening walk", duration=30, frequency="daily", priority="High", time="18:00"))
+    buddy.add_task(Task("Breakfast", duration=10, frequency="daily", priority="High", time="07:30"))
+    buddy.add_task(Task("Lunch", duration=10, frequency="daily", priority="Medium", time="12:00"))
+    owner.add_pet(buddy)
+
+    ordered = Scheduler(owner).sort_by_time()
+
+    assert [task.time for task in ordered] == ["07:30", "12:00", "18:00"]
+    assert [task.description for task in ordered] == ["Breakfast", "Lunch", "Evening walk"]
+
+
+def test_sort_by_time_is_numeric_not_lexicographic():
+    """An unpadded '9:00' must sort before '10:00' (numeric, not string, order)."""
+    owner = Owner(name="Sam", time_available=120)
+    luna = Pet(name="Luna", species="cat", age=5)
+    luna.add_task(Task("Ten", duration=5, frequency="daily", priority="Low", time="10:00"))
+    luna.add_task(Task("Nine", duration=5, frequency="daily", priority="Low", time="9:00"))
+    owner.add_pet(luna)
+
+    ordered = Scheduler(owner).sort_by_time()
+
+    # A plain string sort would wrongly put "10:00" first because "1" < "9".
+    assert [task.time for task in ordered] == ["9:00", "10:00"]
+
+
+def test_sort_by_time_does_not_mutate_input():
+    """Sorting returns a new list and leaves the original task order untouched."""
+    owner = Owner(name="Sam", time_available=120)
+    buddy = Pet(name="Buddy", species="dog", age=3)
+    buddy.add_task(Task("Later", duration=5, frequency="daily", priority="Low", time="20:00"))
+    buddy.add_task(Task("Earlier", duration=5, frequency="daily", priority="Low", time="06:00"))
+    owner.add_pet(buddy)
+
+    original = buddy.get_tasks()
+    Scheduler(owner).sort_by_time(original)
+
+    # Original list is still in insertion order, not sorted in place.
+    assert [task.description for task in original] == ["Later", "Earlier"]
+
+
+# ---------------------------------------------------------------------------
+# Recurrence logic: completing a daily task creates the next day's task.
+# ---------------------------------------------------------------------------
+
+def test_completing_daily_task_creates_next_day_task():
+    """Marking a daily task complete should add a fresh task for the next day."""
+    pet = Pet(name="Buddy", species="dog", age=3)
+    pet.add_task(Task("Morning walk", duration=30, frequency="daily", priority="High", time="07:00"))
+
+    original = pet.get_tasks()[0]
+    original.mark_complete()
+
+    tasks = pet.get_tasks()
+    assert len(tasks) == 2                      # today's + next day's
+    assert tasks[0] is original
+    assert tasks[0].completed is True           # today's is done
+
+    next_day = tasks[1]
+    assert next_day.completed is False          # next day starts fresh
+    assert next_day.description == "Morning walk"
+    assert next_day.frequency == "daily"
+    assert next_day.time == "07:00"             # same time carried over
+    assert next_day.pet is pet                  # linked back to the pet
+    assert next_day is not original             # a genuinely new task object
