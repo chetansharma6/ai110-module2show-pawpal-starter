@@ -10,7 +10,7 @@ import sys
 # tests run from inside the tests/ folder.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pawpal_system import Pet, Task
+from pawpal_system import Owner, Pet, Task, Scheduler
 
 
 def test_mark_complete_changes_status():
@@ -29,3 +29,83 @@ def test_adding_task_increases_pet_task_count():
     assert len(pet.get_tasks()) == 0
     pet.add_task(Task("Feed", duration=10, frequency="daily", priority="Medium"))
     assert len(pet.get_tasks()) == 1
+
+
+def test_completing_recurring_task_queues_next_occurrence():
+    """Completing a daily/weekly task should auto-add a fresh, incomplete copy."""
+    pet = Pet(name="Buddy", species="dog", age=3)
+    pet.add_task(Task("Walk", duration=30, frequency="daily", priority="High", time="07:00"))
+
+    pet.get_tasks()[0].mark_complete()
+
+    tasks = pet.get_tasks()
+    assert len(tasks) == 2                       # original + next occurrence
+    assert tasks[0].completed is True            # today's is done
+    next_task = tasks[1]
+    assert next_task.completed is False          # next occurrence is fresh
+    assert next_task.description == "Walk"       # same details carried over
+    assert next_task.frequency == "daily"
+    assert next_task.time == "07:00"
+    assert next_task.pet is pet                  # wired back to the pet
+
+
+def test_completing_twice_does_not_spawn_duplicates():
+    """Re-marking an already-complete task should not queue another occurrence."""
+    pet = Pet(name="Buddy", species="dog", age=3)
+    pet.add_task(Task("Walk", duration=30, frequency="daily", priority="High"))
+
+    task = pet.get_tasks()[0]
+    task.mark_complete()
+    task.mark_complete()  # idempotent
+
+    assert len(pet.get_tasks()) == 2  # not 3
+
+
+def test_non_recurring_task_does_not_spawn():
+    """A one-off task (not daily/weekly) should not regenerate on completion."""
+    pet = Pet(name="Buddy", species="dog", age=3)
+    pet.add_task(Task("Vet visit", duration=60, frequency="once", priority="High"))
+
+    pet.get_tasks()[0].mark_complete()
+
+    assert len(pet.get_tasks()) == 1
+
+
+def test_detect_conflicts_flags_same_time_across_pets():
+    """Two tasks at the same time on different pets should be reported."""
+    owner = Owner(name="Sam", time_available=120)
+    buddy = Pet(name="Buddy", species="dog", age=3)
+    luna = Pet(name="Luna", species="cat", age=5)
+    buddy.add_task(Task("Walk", duration=30, frequency="daily", priority="High", time="18:30"))
+    luna.add_task(Task("Play", duration=15, frequency="daily", priority="Medium", time="18:30"))
+    owner.add_pet(buddy)
+    owner.add_pet(luna)
+
+    conflicts = Scheduler(owner).detect_conflicts()
+
+    assert len(conflicts) == 1
+    assert "18:30" in conflicts[0]
+
+
+def test_detect_conflicts_flags_partial_overlap():
+    """Overlapping (not identical) windows should also be flagged."""
+    owner = Owner(name="Sam", time_available=120)
+    buddy = Pet(name="Buddy", species="dog", age=3)
+    buddy.add_task(Task("Hike", duration=90, frequency="weekly", priority="Low", time="09:00"))
+    buddy.add_task(Task("Vet", duration=30, frequency="once", priority="High", time="10:00"))
+    owner.add_pet(buddy)
+
+    conflicts = Scheduler(owner).detect_conflicts()
+
+    assert len(conflicts) == 1  # 09:00-10:30 overlaps 10:00-10:30
+
+
+def test_no_conflicts_when_times_are_clear():
+    """Non-overlapping tasks should produce no warnings."""
+    owner = Owner(name="Sam", time_available=120)
+    buddy = Pet(name="Buddy", species="dog", age=3)
+    buddy.add_task(Task("Walk", duration=30, frequency="daily", priority="High", time="07:00"))
+    buddy.add_task(Task("Feed", duration=10, frequency="daily", priority="Medium", time="18:00"))
+    owner.add_pet(buddy)
+
+    assert Scheduler(owner).detect_conflicts() == []
